@@ -356,6 +356,41 @@ const DEPOSIT = 10000;
 <!-- ════ MOBILE CARDS ════ -->
 <div class="mobile-trades" id="mob-trades"></div>
 
+<!-- ════ ПРОПУЩЕННЫЕ СЕТАПЫ ════ -->
+<div id="sec-missed" style="margin-top:26px;padding-top:18px;border-top:1px solid var(--border)">
+
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px">
+    <div>
+      <div style="font-size:15px;font-weight:700">🚫 Пропущенные сетапы</div>
+      <div class="dep-lbl" id="missed-sub" style="color:var(--dim);font-size:11px">загрузка...</div>
+    </div>
+    <button class="btn" onclick="loadMissed()">↻ Обновить</button>
+  </div>
+
+  <div class="ins-card" style="margin-bottom:12px">
+    <h4>Отказы по фильтрам — верны / упущено</h4>
+    <div id="missed-byfilter"><div style="color:var(--dim);font-size:12px">Загрузка...</div></div>
+  </div>
+
+  <div class="table-wrap">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Дата</th><th>Актив</th><th>Dir</th><th>ТФ</th>
+            <th>Вход гип.</th><th>Стоп</th><th>Цель</th><th>R:R</th>
+            <th>Фильтр</th><th>Причина отказа</th>
+            <th>Сверка до</th><th>Исход</th><th>Вердикт</th>
+          </tr>
+        </thead>
+        <tbody id="missed-body">
+          <tr><td colspan="14" class="pnl-z" style="padding:20px;text-align:center">Загрузка...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 <!-- LEGEND -->
 <div class="legend">
   <div class="li"><div class="ld" style="background:var(--green)"></div>По плану (даже если стоп)</div>
@@ -467,6 +502,8 @@ function loadData() {
         document.getElementById('fa-date').value = new Date().toISOString().slice(0,10);
         calcRR();
         openModal('modal-add');
+        // убрать ?add... из адреса, иначе окно открывается при каждой перезагрузке
+        try { history.replaceState(null, '', window.location.pathname); } catch(e) {}
       }
     })
     .catch(() => {
@@ -1149,7 +1186,107 @@ function toggleTheme() {
   }
 })();
 
-document.addEventListener('DOMContentLoaded', loadData);
+// ════════════════════════════════
+//  ПРОПУЩЕННЫЕ СЕТАПЫ (журнал отказов)
+// ════════════════════════════════
+let missed = [];
+
+function loadMissed() {
+  fetch(APPS_SCRIPT_URL + '?action=missed&t=' + Date.now())
+    .then(r => r.json())
+    .then(d => {
+      missed = (d.missed || []).filter(m => m.asset);
+      missed.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      renderMissed();
+    })
+    .catch(() => {
+      document.getElementById('missed-sub').textContent = 'не удалось загрузить';
+    });
+}
+
+function verdictBadge(v) {
+  const s = String(v || '').trim().toLowerCase();
+  if (s.indexOf('верн') === 0 || s === 'correct') return '<span style="color:var(--green);font-weight:600">✅ отказ верный</span>';
+  if (s.indexOf('упущ') === 0 || s === 'missed')  return '<span style="color:var(--red);font-weight:600">❌ упущено</span>';
+  if (s.indexOf('нейтр') === 0 || s === 'neutral') return '<span style="color:var(--dim)">— нейтрально</span>';
+  return '<span style="color:var(--yel)">⏳ ждёт</span>';
+}
+
+function verdictKind(v) {
+  const s = String(v || '').trim().toLowerCase();
+  if (s.indexOf('верн') === 0 || s === 'correct') return 'correct';
+  if (s.indexOf('упущ') === 0 || s === 'missed')  return 'missed';
+  if (s.indexOf('нейтр') === 0 || s === 'neutral') return 'neutral';
+  return 'pending';
+}
+
+function renderMissed() {
+  const body = document.getElementById('missed-body');
+  const sub  = document.getElementById('missed-sub');
+  const box  = document.getElementById('missed-byfilter');
+
+  if (!missed.length) {
+    body.innerHTML = '<tr><td colspan="14" class="pnl-z" style="padding:20px;text-align:center">Пока пусто</td></tr>';
+    sub.textContent = 'записей нет';
+    box.innerHTML = '<div style="color:var(--dim);font-size:12px">Нет данных</div>';
+    return;
+  }
+
+  const n = missed.length;
+  const pend = missed.filter(m => verdictKind(m.verdict) === 'pending').length;
+  sub.textContent = 'всего ' + n + ' · ждут сверки ' + pend;
+
+  // сводка по фильтрам
+  const agg = {};
+  missed.forEach(m => {
+    const f = String(m.refusal_filter || '—').trim() || '—';
+    if (!agg[f]) agg[f] = { total: 0, correct: 0, missed: 0, neutral: 0, pending: 0 };
+    agg[f].total++;
+    agg[f][verdictKind(m.verdict)]++;
+  });
+
+  const rows = Object.keys(agg).sort().map(f => {
+    const a = agg[f];
+    const judged = a.correct + a.missed;
+    const pct = judged ? Math.round(a.correct / judged * 100) : null;
+    const warn = (judged >= 15 && pct !== null && pct < 50)
+      ? ' <span style="color:var(--yel)">⚠ пересмотреть</span>' : '';
+    const pctTxt = pct === null
+      ? '<span style="color:var(--dim)">нет сверок</span>'
+      : '<span style="color:' + (pct >= 50 ? 'var(--green)' : 'var(--red)') + '">' + pct + '% верных</span>'
+        + ' <span style="color:var(--dim)">(' + a.correct + '/' + judged + ')</span>'
+        + (judged < 15 ? ' <span style="color:var(--dim)">— мало данных</span>' : '') + warn;
+    return '<div class="ins-row"><div class="ins-lbl">' + f + ' · отказов ' + a.total + '</div>'
+         + '<div class="ins-val">' + pctTxt + '</div></div>';
+  }).join('');
+  box.innerHTML = rows;
+
+  // таблица
+  body.innerHTML = missed.map(m => {
+    const d = String(m.date || '').slice(0, 10);
+    const dir = String(m.direction || '');
+    const dirCol = dir.toUpperCase().indexOf('LONG') >= 0 || dir.toUpperCase().indexOf('BUY') >= 0 ? 'var(--green)' : 'var(--red)';
+    const reason = String(m.refusal_reason || '');
+    return '<tr>'
+      + '<td>' + (m.id || '') + '</td>'
+      + '<td>' + d + '</td>'
+      + '<td style="font-weight:600">' + (m.asset || '') + '</td>'
+      + '<td style="color:' + dirCol + '">' + dir + '</td>'
+      + '<td>' + (m.tf || '') + '</td>'
+      + '<td>' + (m.entry_hypo || '') + '</td>'
+      + '<td>' + (m.stop_hypo || '') + '</td>'
+      + '<td>' + (m.target_hypo || '') + '</td>'
+      + '<td>' + (m.rr_plan || '') + '</td>'
+      + '<td style="font-weight:600">' + (m.refusal_filter || '') + '</td>'
+      + '<td style="max-width:340px;font-size:11px;color:var(--dim)" title="' + reason.replace(/"/g, '&quot;') + '">' + reason + '</td>'
+      + '<td style="font-size:11px">' + String(m.check_due || '').slice(0, 16).replace('T', ' ') + '</td>'
+      + '<td style="font-size:11px">' + (m.outcome || '') + '</td>'
+      + '<td>' + verdictBadge(m.verdict) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+document.addEventListener('DOMContentLoaded', () => { loadData(); loadMissed(); });
 </script>
 </body>
 </html>
