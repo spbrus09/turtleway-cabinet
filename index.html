@@ -375,7 +375,7 @@ const DEPOSIT = 10000;
   <div class="table-wrap">
     <div class="table-scroll">
       <table>
-        <thead>
+        <thead id="missed-head">
           <tr>
             <th>#</th><th>Дата</th><th>Актив</th><th>Dir</th><th>ТФ</th>
             <th>Вход гип.</th><th>Стоп</th><th>Цель</th><th>R:R</th>
@@ -1220,29 +1220,92 @@ function verdictKind(v) {
   return 'pending';
 }
 
+// Колонки, которые таблица рисует сама, со своим оформлением.
+// Всё, чего здесь нет, но что пришло из листа, дорисовывается справа
+// автоматически — новая колонка в Google Sheets появляется на дашборде
+// без правки этого файла.
+const MISSED_KNOWN = ['id','date','asset','direction','tf','price_at_refusal',
+  'entry_hypo','stop_hypo','target_hypo','rr_plan','refusal_filter',
+  'refusal_reason','check_due','outcome','verdict'];
+
+// Человеческие подписи для автоколонок. Нет в словаре — берётся имя поля.
+const MISSED_LABELS = {
+  r_missed: 'Упущено R',
+  pnl_missed: 'Упущено $',
+  note: 'Заметка'
+};
+
+function missedExtraKeys() {
+  const seen = [];
+  missed.forEach(m => Object.keys(m || {}).forEach(k => {
+    if (MISSED_KNOWN.indexOf(k) < 0 && seen.indexOf(k) < 0) seen.push(k);
+  }));
+  return seen;
+}
+
+function missedLabel(k) {
+  return MISSED_LABELS[k] || k;
+}
+
+function numOrNull(v) {
+  if (v === '' || v === null || v === undefined) return null;
+  const n = parseFloat(String(v).replace(',', '.'));
+  return isNaN(n) ? null : n;
+}
+
 function renderMissed() {
   const body = document.getElementById('missed-body');
   const sub  = document.getElementById('missed-sub');
   const box  = document.getElementById('missed-byfilter');
+  const head = document.getElementById('missed-head');
+
+  const baseCols = ['#','Дата','Актив','Dir','ТФ','Вход гип.','Стоп','Цель','R:R',
+                    'Фильтр','Причина отказа','Сверка до','Исход','Вердикт'];
 
   if (!missed.length) {
-    body.innerHTML = '<tr><td colspan="14" class="pnl-z" style="padding:20px;text-align:center">Пока пусто</td></tr>';
+    body.innerHTML = '<tr><td colspan="' + baseCols.length + '" class="pnl-z" style="padding:20px;text-align:center">Пока пусто</td></tr>';
     sub.textContent = 'записей нет';
     box.innerHTML = '<div style="color:var(--dim);font-size:12px">Нет данных</div>';
     return;
   }
 
+  const extra = missedExtraKeys();
+
+  // шапка: фиксированные колонки + всё новое, что появилось в листе
+  if (head) {
+    head.innerHTML = '<tr>' + baseCols.concat(extra.map(missedLabel))
+      .map(c => '<th>' + c + '</th>').join('') + '</tr>';
+  }
+
   const n = missed.length;
   const pend = missed.filter(m => verdictKind(m.verdict) === 'pending').length;
-  sub.textContent = 'всего ' + n + ' · ждут сверки ' + pend;
+
+  // суммарно упущено — считается только по сверенным записям
+  let lostR = 0, lostUsd = 0, lostN = 0;
+  missed.forEach(m => {
+    if (verdictKind(m.verdict) !== 'missed') return;
+    const r = numOrNull(m.r_missed), p = numOrNull(m.pnl_missed);
+    if (r !== null) { lostR += r; lostN++; }
+    if (p !== null) lostUsd += p;
+  });
+
+  let subTxt = 'всего ' + n + ' · ждут сверки ' + pend;
+  if (lostN) {
+    subTxt += ' · упущено ' + lostR.toFixed(2) + 'R / $' + Math.round(lostUsd);
+  }
+  sub.textContent = subTxt;
 
   // сводка по фильтрам
   const agg = {};
   missed.forEach(m => {
     const f = String(m.refusal_filter || '—').trim() || '—';
-    if (!agg[f]) agg[f] = { total: 0, correct: 0, missed: 0, neutral: 0, pending: 0 };
+    if (!agg[f]) agg[f] = { total: 0, correct: 0, missed: 0, neutral: 0, pending: 0, lostUsd: 0 };
     agg[f].total++;
     agg[f][verdictKind(m.verdict)]++;
+    if (verdictKind(m.verdict) === 'missed') {
+      const p = numOrNull(m.pnl_missed);
+      if (p !== null) agg[f].lostUsd += p;
+    }
   });
 
   const rows = Object.keys(agg).sort().map(f => {
@@ -1251,11 +1314,13 @@ function renderMissed() {
     const pct = judged ? Math.round(a.correct / judged * 100) : null;
     const warn = (judged >= 15 && pct !== null && pct < 50)
       ? ' <span style="color:var(--yel)">⚠ пересмотреть</span>' : '';
+    const lost = a.lostUsd
+      ? ' <span style="color:var(--red)">· −$' + Math.round(a.lostUsd) + '</span>' : '';
     const pctTxt = pct === null
       ? '<span style="color:var(--dim)">нет сверок</span>'
       : '<span style="color:' + (pct >= 50 ? 'var(--green)' : 'var(--red)') + '">' + pct + '% верных</span>'
         + ' <span style="color:var(--dim)">(' + a.correct + '/' + judged + ')</span>'
-        + (judged < 15 ? ' <span style="color:var(--dim)">— мало данных</span>' : '') + warn;
+        + (judged < 15 ? ' <span style="color:var(--dim)">— мало данных</span>' : '') + warn + lost;
     return '<div class="ins-row"><div class="ins-lbl">' + f + ' · отказов ' + a.total + '</div>'
          + '<div class="ins-val">' + pctTxt + '</div></div>';
   }).join('');
@@ -1267,6 +1332,18 @@ function renderMissed() {
     const dir = String(m.direction || '');
     const dirCol = dir.toUpperCase().indexOf('LONG') >= 0 || dir.toUpperCase().indexOf('BUY') >= 0 ? 'var(--green)' : 'var(--red)';
     const reason = String(m.refusal_reason || '');
+    const extraTds = extra.map(k => {
+      const raw = m[k];
+      const num = numOrNull(raw);
+      let style = 'font-size:11px';
+      let txt = (raw === null || raw === undefined) ? '' : String(raw);
+      if ((k === 'r_missed' || k === 'pnl_missed') && num !== null && num !== 0) {
+        style = 'font-size:11px;font-weight:600;color:var(--red)';
+        txt = (k === 'pnl_missed' ? '$' : '') + txt;
+      }
+      if (k === 'note') style = 'max-width:280px;font-size:11px;color:var(--dim)';
+      return '<td style="' + style + '" title="' + txt.replace(/"/g, '&quot;') + '">' + txt + '</td>';
+    }).join('');
     return '<tr>'
       + '<td>' + (m.id || '') + '</td>'
       + '<td>' + d + '</td>'
@@ -1282,6 +1359,7 @@ function renderMissed() {
       + '<td style="font-size:11px">' + String(m.check_due || '').slice(0, 16).replace('T', ' ') + '</td>'
       + '<td style="font-size:11px">' + (m.outcome || '') + '</td>'
       + '<td>' + verdictBadge(m.verdict) + '</td>'
+      + extraTds
       + '</tr>';
   }).join('');
 }
