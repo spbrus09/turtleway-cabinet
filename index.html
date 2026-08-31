@@ -542,6 +542,13 @@ function parseRow(r) {
     else status = 'yellow';
   }
 
+  // Сделка в активной фазе: вход есть, выхода и P&L ещё нет.
+  // Считаем такую строку открытой независимо от того, что стоит в колонке
+  // «статус» (туда иногда попадает оценка чек-листа — «частично» и т.п.).
+  const hasExit = r.exit_price !== '' && r.exit_price != null;
+  const hasPnl  = r.pnl !== '' && r.pnl != null;
+  if (r.status !== 'archived' && !hasExit && !hasPnl) status = 'open';
+
   // Normalize proto (was protocol followed?)
   let proto = null;
   if (r.proto === 'true')  proto = true;
