@@ -816,9 +816,11 @@ function renderInsights(closed) {
 // ════════════════════════════════════════════════
 function fp(v, a) {
   if (v == null) return '—';
-  if (['ETH','BTC'].includes(a)) return v.toFixed(2);
-  if (['XRP','LINK','APT','ONDO'].includes(a)) return v.toFixed(4);
-  return v.toFixed(2);
+  // Число знаков после запятой — по величине цены, чтобы дешёвые монеты
+  // (DOGE 0,0828) не превращались в «0.08».
+  const x = Math.abs(v);
+  const d = x >= 100 ? 2 : x >= 10 ? 3 : x >= 1 ? 4 : x >= 0.1 ? 5 : x >= 0.01 ? 6 : 8;
+  return v.toFixed(d);
 }
 function fPnl(v) {
   if (v == null) return '<span class="pnl-z">—</span>';
