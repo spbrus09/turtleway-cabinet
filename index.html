@@ -54,6 +54,8 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .hdr-right .dep-lbl{color:var(--dim);font-size:10px}
 .hdr-btn{background:var(--bg3);border:1px solid var(--border);color:var(--dim);padding:5px 12px;border-radius:6px;cursor:pointer;font-size:11px;font-family:inherit;white-space:nowrap}
 .hdr-btn:hover{color:var(--text);border-color:var(--blue)}
+.acc-sw{display:inline-flex;gap:4px;margin-right:6px}
+.hdr-btn.acc-btn.on{color:var(--text);border-color:var(--blue);background:rgba(80,140,255,.15);font-weight:600}
 .hdr-btn.add{border-color:rgba(0,208,132,.5);color:var(--green)}
 .hdr-btn.add:hover{background:rgba(0,208,132,.1)}
 
@@ -232,7 +234,19 @@ tbody tr.ro td:first-child{border-left:3px solid var(--blue)}
 <!-- ════ CONFIG ════ -->
 <script>
 const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxMe_UX3XrdC1ShhsbXLm8pNvCyFFfk3Cs5hvv4XI7PoasH3XbPyRCfE2_4D-v5_zI/exec';
-const DEPOSIT = 10000;
+// Счета: у каждого свой лист в таблице (Trades / Trades50k), депозит и риск на сделку
+const ACCOUNTS = {
+  '10k': { label: 'Счёт 10к',      deposit: 10000, risk: 100 },
+  '50k': { label: 'HashHedge 50к', deposit: 50000, risk: 500 },
+};
+let ACCOUNT = (() => {
+  const q = new URLSearchParams(location.search).get('acc');
+  if (q && ACCOUNTS[q]) return q;
+  try { const v = localStorage.getItem('tw_account'); if (v && ACCOUNTS[v]) return v; } catch(e) {}
+  return '10k';
+})();
+let DEPOSIT  = ACCOUNTS[ACCOUNT].deposit;
+let RISK_USD = ACCOUNTS[ACCOUNT].risk;
 </script>
 
 <!-- ════ HEADER ════ -->
@@ -242,6 +256,10 @@ const DEPOSIT = 10000;
     <div class="sub" id="hdr-sub">Плейбук D · загрузка...</div>
   </div>
   <div class="hdr-center">
+    <span class="acc-sw">
+      <button class="hdr-btn acc-btn" data-acc="10k" onclick="switchAccount('10k')">Счёт 10к</button>
+      <button class="hdr-btn acc-btn" data-acc="50k" onclick="switchAccount('50k')">HashHedge 50к</button>
+    </span>
     <button class="hdr-btn" onclick="loadData()">⟳ Обновить</button>
     <a class="hdr-btn" href="https://docs.google.com/spreadsheets/d/1Y_V9HTHsZOkHrOeHHUjqdftQTqtWaF4SLK3TI2Vrtos/edit" target="_blank">📊 Таблица</a>
     <button class="hdr-btn add" onclick="openAddTrade()">➕ Сделка</button>
@@ -513,9 +531,20 @@ let curProto = 'all', curAsset = null;
 // ════════════════════════════════════════════════
 //  LOAD FROM GOOGLE SHEETS
 // ════════════════════════════════════════════════
+function markAccount() {
+  document.querySelectorAll('.acc-btn').forEach(b => b.classList.toggle('on', b.dataset.acc === ACCOUNT));
+}
+function switchAccount(acc) {
+  if (!ACCOUNTS[acc] || acc === ACCOUNT) return;
+  ACCOUNT = acc; DEPOSIT = ACCOUNTS[acc].deposit; RISK_USD = ACCOUNTS[acc].risk;
+  try { localStorage.setItem('tw_account', acc); } catch(e) {}
+  curAsset = null;
+  loadData();
+}
 function loadData() {
   document.getElementById('err-banner').style.display = 'none';
-  fetch(APPS_SCRIPT_URL + '?action=trades&t=' + Date.now())
+  markAccount();
+  fetch(APPS_SCRIPT_URL + '?action=trades&account=' + ACCOUNT + '&t=' + Date.now())
     .then(res => res.json())
     .then(data => {
       trades = (data.trades || []).map(parseRow).filter(t => t.asset && !t.archived);
@@ -603,7 +632,7 @@ function parseRow(r) {
     stop:   pf(r.stop_price),
     target: pf(r.target_price),
     exit:   pf(r.exit_price),
-    risk:   pf(r.risk) || 100,
+    risk:   pf(r.risk) || RISK_USD,
     rr:     pf(r.rr_plan),
     r:      (r.r_actual !== '' && r.r_actual != null) ? pf(r.r_actual) : null,
     pnl:    (r.pnl !== '' && r.pnl != null) ? pf(r.pnl) : null,
@@ -641,7 +670,7 @@ function renderHeader(closed, open) {
   const pctEl = document.getElementById('dep-pct');
   pctEl.textContent = (pnlTotal >= 0 ? '+' : '') + pct + '% с начала';
   pctEl.style.color = pnlTotal >= 0 ? 'var(--green)' : 'var(--red)';
-  document.getElementById('hdr-sub').textContent = `Плейбук D · ${open.length} открыт${open.length===1?'а':'о'} · обновлено ${new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}`;
+  document.getElementById('hdr-sub').textContent = `${ACCOUNTS[ACCOUNT].label} · Плейбук D · ${open.length} открыт${open.length===1?'а':'о'} · обновлено ${new Date().toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}`;
 
   // Прогноз прибыли — только текущий месяц
   if (closed.length > 0) {
@@ -1117,7 +1146,7 @@ async function submitTrade() {
     direction: document.getElementById('fa-dir').value,
     tf: document.getElementById('fa-tf').value,
     date, entry_price: entry, stop_price: stop, target_price: target,
-    risk: 100, rr_plan: rr, status: 'open',
+    risk: RISK_USD, rr_plan: rr, status: 'open', account: ACCOUNT,
     proto, checklist: proto ? '✅' : '❌',
     note: document.getElementById('fa-note').value
   };
@@ -1161,7 +1190,7 @@ function calcClose() {
   const risk   = Math.abs(t.entry - t.stop);
   const profit = (exit - t.entry) * (t.dir === 'LONG' ? 1 : -1);
   const r      = risk ? +(profit / risk).toFixed(2) : 0;
-  const pnl    = +(100 * r).toFixed(2);
+  const pnl    = +((t.risk || RISK_USD) * r).toFixed(2);
   const el = document.getElementById('close-result');
   el.textContent = (r>=0?'+':'') + r + 'R  (' + (pnl>=0?'+$':'-$') + Math.abs(pnl).toFixed(0) + ')';
   el.style.color = r > 0 ? 'var(--green)' : r < 0 ? 'var(--red)' : 'var(--yel)';
@@ -1174,9 +1203,9 @@ async function submitClose() {
   const risk     = Math.abs(t.entry - t.stop);
   const profit   = (exit - t.entry) * (t.dir === 'LONG' ? 1 : -1);
   const r_actual = risk ? +(profit / risk).toFixed(2) : 0;
-  const pnl      = +(100 * r_actual).toFixed(2);
+  const pnl      = +((t.risk || RISK_USD) * r_actual).toFixed(2);
   const data = {
-    _action: 'update', id: t.id,
+    _action: 'update', id: t.id, account: ACCOUNT,
     exit_price: exit, r_actual, pnl,
     status: document.getElementById('fc-status').value,
     note: document.getElementById('fc-note').value
